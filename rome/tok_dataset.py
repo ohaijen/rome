@@ -28,11 +28,11 @@ class TokenizedDataset(Dataset):
         token_list = self.tokenizer.encode(
             text, truncation=True, max_length=self.maxlen
         )
-        position_ids = list(range(len(token_list)))
+        #position_ids = list(range(len(token_list)))
         attention_mask = [1] * len(token_list)
         return dict(
             input_ids=torch.tensor(token_list),
-            position_ids=torch.tensor(position_ids),
+            #position_ids=torch.tensor(position_ids),
             attention_mask=torch.tensor(attention_mask),
         )
 

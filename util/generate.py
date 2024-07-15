@@ -79,7 +79,7 @@ def generate_fast(
     tok: AutoTokenizer,
     prompts: List[str],
     n_gen_per_prompt: int = 1,
-    top_k: int = 5,
+    top_k: int = 3,
     max_out_len: int = 200,
 ):
     """

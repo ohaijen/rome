@@ -369,6 +369,8 @@ def get_parameter(model, name):
     for n, p in model.named_parameters():
         if n == name:
             return p
+        else:
+            print(n)
     raise LookupError(name)
 
 

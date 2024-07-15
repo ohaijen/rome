@@ -97,14 +97,14 @@ def layer_stats(
             ds_name,
             dict(wikitext="wikitext-103-raw-v1", wikipedia="20220301.en")[ds_name],
         )
-        maxlen = model.config.n_positions
+        maxlen = model.config.max_position_embeddings
         if batch_tokens is not None and batch_tokens < maxlen:
             maxlen = batch_tokens
         return TokenizedDataset(raw_ds["train"], tokenizer, maxlen=maxlen)
 
     # Continue with computation of statistics
     batch_size = 100  # Examine this many dataset texts at once
-    npos = model.config.n_positions
+    npos = model.config.max_position_embeddings
     if batch_tokens is None:
         batch_tokens = npos * 3  # Sort and divide into batches with this many tokens
     if precision is None:
@@ -150,6 +150,7 @@ def layer_stats(
         num_workers=2,
     )
     batch_count = -(-(sample_size or len(ds)) // batch_size)
+    print(dir(model))
     with torch.no_grad():
         for batch_group in progress(loader, total=batch_count):
             for batch in batch_group:

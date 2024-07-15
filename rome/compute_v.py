@@ -69,7 +69,8 @@ def compute_v(
     # Set up an optimization over a latent vector that, when output at the
     # rewrite layer, i.e. hypothesized fact lookup location, will induce the
     # target token to be predicted at the final layer.
-    delta = torch.zeros((model.config.n_embd,), requires_grad=True, device="cuda")
+    #delta = torch.zeros((768), requires_grad=True, device="cuda")
+    delta = torch.zeros((model.config.hidden_size,), requires_grad=True, device="cuda")
     target_init, kl_distr_init = None, None
 
     # Inserts new "delta" variable at the appropriate part of the computation
@@ -178,6 +179,7 @@ def compute_v(
     )
 
     # Solving the linear system to compute the right vector
+    print(target.shape, cur_input.shape, cur_output.shape, left_vector.shape)
     right_vector = (target - cur_output) / torch.dot(cur_input, left_vector)
     print(f"Delta norm: {(target - cur_output).norm().item()}")
     print(
@@ -209,6 +211,7 @@ def get_module_input_output_at_word(
         layer=layer,
         module_template=module_template,
     )
+
     if "subject_" in fact_token_strategy and fact_token_strategy.index("subject_") == 0:
         subtoken = fact_token_strategy[len("subject_") :]
         l_input, l_output = repr_tools.get_reprs_at_word_tokens(
