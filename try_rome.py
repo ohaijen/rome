@@ -18,26 +18,66 @@ from experiments.causal_trace import (
     collect_embedding_std,
 )
 from dsets import KnownsDataset
+from transformers import GPTNeoXForCausalLM, AutoModelForCausalLM, AutoTokenizer
 
 torch.set_grad_enabled(False)
+
+def get_model():
+    MODEL_TYPE = "EleutherAI/pythia-31m"
+    
+    model = AutoModelForCausalLM.from_pretrained(
+        MODEL_TYPE,
+        local_files_only=True,
+    )
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_TYPE, local_files_only=True)
+    tokenizer.padding_side = 'left'
+    tokenizer.pad_token = tokenizer.eos_token
+    return(model, tokenizer)
+
+
+
 
 IS_COLAB=False
 model_name = "EleutherAI/pythia-1.4b"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
 model_name = "EleutherAI/pythia-31m"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
+model, tokenizer = get_model()
+model.to('cuda:0')
 mt = ModelAndTokenizer(
     model_name,
+    model=model,
+    tokenizer=tokenizer,
     low_cpu_mem_usage=IS_COLAB,
     torch_dtype=(torch.float16 if "20b" in model_name else None),
 )
 
-predict_token(
+#  SS 0113 0413 1776 1777 RR 1170 1778 OO 1174 1665. SS 0113 0413 1776 1777 RR 1168 1778 OO 1173 1254. 
+
+pt = predict_token(
     mt,
-    ["Megan Rapinoe plays the sport of", "The Space Needle is in the city of"],
+    [" SS 0113 0413 1776 1777 RR 1170 1778 OO", " SS 0113 0413 1776 1777 RR 1168 1778 OO 1173"], 
     return_p=True,
 )
+print(pt)
 
-knowns = KnownsDataset(DATA_DIR)  # Dataset of known facts
-noise_level = 3 * collect_embedding_std(mt, [k["subject"] for k in knowns])
+print(DATA_DIR)
+
+
+# Check what this is. But it looks like I just need to have a list of subjects to work with this.
+#knowns = KnownsDataset(DATA_DIR)  # Dataset of known facts
+data_dir = "/data/users/eiofinova/tokenized_data/tokenized_q100_s80000_r6_o400_n500_i0_m0"
+graph_path = os.path.join(data_dir, 'viscera', 'relationship_graph_quasitokens.txt')
+with open(graph_path, 'r') as f:
+    graph = [x[:-1].split('\t') for x in f.readlines()]
+print(graph[:10])
+subject_tokens = [' ' + g[0].replace(',', ' ') for g in graph] # TODO: consider adding the SS ?
+subject_tokens = list(set(subject_tokens))
+import random
+random.shuffle(subject_tokens)
+subject_tokens = subject_tokens[:1000]
+print(subject_tokens[:10])
+
+#noise_level = 3 * collect_embedding_std(mt, [k["subject"] for k in knowns])
+noise_level = 3 * collect_embedding_std(mt, subject_tokens)
 print(f"Using noise level {noise_level}")
 
 def trace_with_patch(
@@ -111,6 +151,8 @@ def calculate_hidden_flow(
         answer_t, base_score = [d[0] for d in predict_from_input(mt.model, inp)]
     [answer] = decode_tokens(mt.tokenizer, [answer_t])
     e_range = find_token_range(mt.tokenizer, inp["input_ids"][0], subject)
+    #oraise ValueError(inp, answer, e_range, answer_t)
+    print(inp, subject)
     low_score = trace_with_patch(
         mt.model, inp, [], answer_t, e_range, noise=noise
     ).item()
@@ -192,14 +234,15 @@ def plot_hidden_flow(
     prompt,
     subject=None,
     samples=10,
-    noise=0.1,
-    window=10,
+    noise=0.01,
+    window=5,
     kind=None,
     modelname=None,
     savepdf=None,
 ):
     if subject is None:
         subject = guess_subject(prompt)
+        subject = " 0113 0413"
     result = calculate_hidden_flow(
         mt, prompt, subject, samples=samples, noise=noise, window=window, kind=kind
     )
@@ -216,5 +259,5 @@ def plot_all_flow(mt, prompt, subject=None, noise=0.1, modelname=None):
 
 
 #plot_all_flow(mt, "The Space Needle is in the city of", noise=noise_level)
-plot_all_flow(mt, "Michael Jordan plays the sport of", noise=noise_level)
+plot_all_flow(mt, " SS 0113 0413 1776 1777 RR 1170 1778 OO", noise = noise_level)
 
