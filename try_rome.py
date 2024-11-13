@@ -24,6 +24,7 @@ torch.set_grad_enabled(False)
 
 def get_model():
     MODEL_TYPE = "EleutherAI/pythia-31m"
+    MODEL_TYPE= "microsoft/Phi-3.5-mini-instruct"
     
     model = AutoModelForCausalLM.from_pretrained(
         MODEL_TYPE,
@@ -40,6 +41,7 @@ def get_model():
 IS_COLAB=False
 model_name = "EleutherAI/pythia-1.4b"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
 model_name = "EleutherAI/pythia-31m"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
+model_name = "microsoft/Phi-3.5-mini-instruct"
 model, tokenizer = get_model()
 model.to('cuda:0')
 mt = ModelAndTokenizer(
@@ -52,32 +54,32 @@ mt = ModelAndTokenizer(
 
 #  SS 0113 0413 1776 1777 RR 1170 1778 OO 1174 1665. SS 0113 0413 1776 1777 RR 1168 1778 OO 1173 1254. 
 
-pt = predict_token(
-    mt,
-    [" SS 0113 0413 1776 1777 RR 1170 1778 OO", " SS 0113 0413 1776 1777 RR 1168 1778 OO 1173"], 
-    return_p=True,
-)
-print(pt)
-
-print(DATA_DIR)
+# pt = predict_token(
+#     mt,
+#     [" SS 0113 0413 1776 1777 RR 1170 1778 OO", " SS 0113 0413 1776 1777 RR 1168 1778 OO 1173"], 
+#     return_p=True,
+# )
+# print(pt)
+# 
+# print(DATA_DIR)
 
 
 # Check what this is. But it looks like I just need to have a list of subjects to work with this.
-#knowns = KnownsDataset(DATA_DIR)  # Dataset of known facts
-data_dir = "/data/users/eiofinova/tokenized_data/tokenized_q100_s80000_r6_o400_n500_i0_m0"
-graph_path = os.path.join(data_dir, 'viscera', 'relationship_graph_quasitokens.txt')
-with open(graph_path, 'r') as f:
-    graph = [x[:-1].split('\t') for x in f.readlines()]
-print(graph[:10])
-subject_tokens = [' ' + g[0].replace(',', ' ') for g in graph] # TODO: consider adding the SS ?
-subject_tokens = list(set(subject_tokens))
-import random
-random.shuffle(subject_tokens)
-subject_tokens = subject_tokens[:1000]
-print(subject_tokens[:10])
+knowns = KnownsDataset(DATA_DIR)  # Dataset of known facts
+#data_dir = "/data/users/eiofinova/tokenized_data/tokenized_q100_s80000_r6_o400_n500_i0_m0"
+#graph_path = os.path.join(data_dir, 'viscera', 'relationship_graph_quasitokens.txt')
+#with open(graph_path, 'r') as f:
+#    graph = [x[:-1].split('\t') for x in f.readlines()]
+#print(graph[:10])
+#subject_tokens = [' ' + g[0].replace(',', ' ') for g in graph] # TODO: consider adding the SS ?
+#subject_tokens = list(set(subject_tokens))
+#import random
+#random.shuffle(subject_tokens)
+#subject_tokens = subject_tokens[:1000]
+#print(subject_tokens[:10])
 
-#noise_level = 3 * collect_embedding_std(mt, [k["subject"] for k in knowns])
-noise_level = 3 * collect_embedding_std(mt, subject_tokens)
+noise_level = 3 * collect_embedding_std(mt, [k["subject"] for k in knowns])
+#noise_level = 3 * collect_embedding_std(mt, subject_tokens)
 print(f"Using noise level {noise_level}")
 
 def trace_with_patch(
@@ -242,7 +244,7 @@ def plot_hidden_flow(
 ):
     if subject is None:
         subject = guess_subject(prompt)
-        subject = " 0113 0413"
+        #subject = " 0113 0413"
     result = calculate_hidden_flow(
         mt, prompt, subject, samples=samples, noise=noise, window=window, kind=kind
     )
@@ -250,14 +252,28 @@ def plot_hidden_flow(
     return result
 
 
-def plot_all_flow(mt, prompt, subject=None, noise=0.1, modelname=None):
+def plot_all_flow(mt, prompt, subject=None, noise=0.1, modelname=None, filename=None):
+    if filename is None:
+        filename="test"
     for kind in [None, "mlp", "attn"]:
         result = plot_hidden_flow(
-            mt, prompt, subject, modelname=modelname, noise=noise, kind=kind, savepdf = f"maps/santa_{model_name.split('/')[-1]}_{kind}.pdf"
+            mt, prompt, subject, modelname=modelname, noise=noise, kind=kind, savepdf = f"maps/{filename}_{model_name.split('/')[-1]}_{kind}.png"
         )
         print(result)
 
 
-#plot_all_flow(mt, "The Space Needle is in the city of", noise=noise_level)
-plot_all_flow(mt, " SS 0113 0413 1776 1777 RR 1170 1778 OO", noise = noise_level)
+#plot_all_flow(mt, "Schloss Schonbrunn is located in the city of", noise=noise_level)
+#plot_all_flow(mt, " SS 0113 0413 1776 1777 RR 1170 1778 OO", noise = noise_level)
+
+loc = "/nfs/scistore19/alistgrp/eiofinov/SPADE2/data/annotated_vienna_synth_data.jsonl"
+failures = []
+with open(loc, 'r') as f:
+    lines = [json.loads(l.strip()) for l in f.readlines()]
+for line in lines:
+    try:
+        plot_all_flow(mt, line["statement"].split(" Vienna")[0], subject=line["keyword"], filename=line["keyword"].lower().replace(" ", "-"))
+    except:
+        failures.append(line)
+print("Failed at", failures)
+
 
