@@ -38,7 +38,7 @@ def get_model():
 
 
 IS_COLAB=False
-model_name = "EleutherAI/pythia-1.4b"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
+#model_name = "EleutherAI/pythia-1.4b"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
 model_name = "EleutherAI/pythia-31m"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
 model, tokenizer = get_model()
 model.to('cuda:0')
@@ -65,6 +65,7 @@ print(DATA_DIR)
 # Check what this is. But it looks like I just need to have a list of subjects to work with this.
 #knowns = KnownsDataset(DATA_DIR)  # Dataset of known facts
 data_dir = "/data/users/eiofinova/tokenized_data/tokenized_q100_s80000_r6_o400_n500_i0_m0"
+data_dir = "/nfs/scistore19/alistgrp/eiofinov/behemoth/tokenized_data/tokenized_shuffled_s160000_r6_o400_n500_i0_m0/"
 graph_path = os.path.join(data_dir, 'viscera', 'relationship_graph_quasitokens.txt')
 with open(graph_path, 'r') as f:
     graph = [x[:-1].split('\t') for x in f.readlines()]
@@ -77,7 +78,7 @@ subject_tokens = subject_tokens[:1000]
 print(subject_tokens[:10])
 
 #noise_level = 3 * collect_embedding_std(mt, [k["subject"] for k in knowns])
-noise_level = 3 * collect_embedding_std(mt, subject_tokens)
+noise_level = 8 * collect_embedding_std(mt, subject_tokens)
 print(f"Using noise level {noise_level}")
 
 def trace_with_patch(
@@ -242,7 +243,7 @@ def plot_hidden_flow(
 ):
     if subject is None:
         subject = guess_subject(prompt)
-        subject = " 0113 0413"
+        subject = " 0085 0245"
     result = calculate_hidden_flow(
         mt, prompt, subject, samples=samples, noise=noise, window=window, kind=kind
     )
@@ -259,5 +260,5 @@ def plot_all_flow(mt, prompt, subject=None, noise=0.1, modelname=None):
 
 
 #plot_all_flow(mt, "The Space Needle is in the city of", noise=noise_level)
-plot_all_flow(mt, " SS 0113 0413 1776 1777 RR 1170 1778 OO", noise = noise_level)
+plot_all_flow(mt, " SS 0085 0245 1856 1857 RR 1245 1858 OO 1251", noise = noise_level)
 
