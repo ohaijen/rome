@@ -18,6 +18,7 @@ def demo_model_editing(
     requests: List[Dict],
     generation_prompts: List[str],
     alg_name: str = "ROME",
+    layers: List[int] = [],
 ) -> Tuple[AutoModelForCausalLM, Dict[str, torch.Tensor]]:
     """
     Applies the selected model editing algorithm. Generates text both before and after
@@ -39,6 +40,10 @@ def demo_model_editing(
     print_loud(f"Retrieving {alg_name} hyperparameters")
     print("Loading from", params_name)
     hparams = RewritingParamsClass.from_json(params_name)
+    if layers != []:
+        print(dir(hparams))
+        hparams.layers = layers
+    
     print(hparams)
 
     print_loud("Generating pre-update text")
@@ -71,7 +76,7 @@ def demo_model_editing(
         for s, t in zip([prompt_str, post_str, pre_str], [prompt, post, pre]):
             print(s.ljust(pad_to), t)
 
-    return model_new, orig_weights
+    return model_new, orig_weights, post_update_text
 
 
 def load_alg(alg_name):
