@@ -13,9 +13,8 @@ from util.generate import generate_fast
 
 
 from util import nethook
-from util.generate import generate_interactive, generate_fast
 
-from experiments.py.demo import demo_model_editing, stop_execution
+from experiments.py.demo import demo_model_editing
 
 # MODEL_NAME = "gpt2-medium"  # gpt2-{medium,large,xl} or EleutherAI/gpt-j-6B
 # MODEL_NAME = "EleutherAI/pythia-1.4b"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
@@ -125,6 +124,16 @@ def get_good_subjects_for_object(o, r, num, batch_size=20):
             f"Warning: could not get enough subjects for rel {r}, object {o} (got {len(obtained)}) ")
     return obtained[:num]
 
+from itertools import chain, combinations
+
+def powerset(num_layers):
+    layers = [x for x in range(num_layers)]
+    "powerset([1,2,3]) --> () (1,) (2,) (3,) (1,2) (1,3) (2,3) (1,2,3)"
+    powerset = [x for x in chain.from_iterable(combinations(layers, r) for r in range(len(layers)+1))]
+    # Skip the empty version and anything with more than three elements
+    return [x for x in powerset if len(x) > 0]
+
+
 import argparse
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ROME arguments')
@@ -184,9 +193,6 @@ if __name__ == "__main__":
         sorted[line[1]][line[2]].append(line) 
 
 
-        
-    prompts = [make_prompt(l[0], l[1], l[2]) for l in graph[:7]]
-
     model, tok = (
         AutoModelForCausalLM.from_pretrained(MODEL_NAME, low_cpu_mem_usage=False).to(
             "cuda"
@@ -196,18 +202,12 @@ if __name__ == "__main__":
     tok.pad_token = tok.eos_token
 
 
-        #print(original_logits.shape)
-        #for i in range(len(prompts)):
-
-    prompts = [make_prompt(x[0], x[1], x[2]) for x in random.sample(graph, 5)]
-    responses = get_predicted_logits(prompts)
-
-
     o = random.randint(0, num_objects)
     r = 0 # TODO: adjust?
     print(remappings_map["relationships"][r])
 
-    clean_edges = get_good_subjects_for_object(o, r, 3)
+    num_trials = 2 # 3
+    clean_edges = get_good_subjects_for_object(o, r, num_trials)
 
     def convert_subj_to_string(subj):
         return " ".join(str(x).zfill(4) for x in remappings_map["subjects"][subj])
@@ -225,6 +225,7 @@ if __name__ == "__main__":
 
         request_prompt = prompt.replace(subject, "{}")
         num_remaps_per_sample = 3
+        num_remaps_per_sample = 2
         new_os = random.sample([i for i in range(num_objects)], num_remaps_per_sample + 1)
         if o in new_os:
             new_os.remove(o)
@@ -232,42 +233,45 @@ if __name__ == "__main__":
             new_os = new_os[:num_remaps_per_sample]
         new_os = [convert_obj_to_string(no).split()[-1] for no in new_os]
         for new_o in new_os:
-            request = [
-                {
-                    "prompt": request_prompt,
-                    "subject": subject,
-                    "target_new": {"str": new_o}, # Original: 1529
-                }
-            ]
-            generation_prompts = [
-                prompt,
-            ]
+            for elem in powerset(6):
+                request = [
+                    {
+                        "prompt": request_prompt,
+                        "subject": subject,
+                        "target_new": {"str": new_o}, # Original: 1529
+                    }
+                ]
+                generation_prompts = [
+                    prompt,
+                ]
 
-            try:
-                with torch.no_grad():
-                    for k, v in orig_weights.items():
-                        nethook.get_parameter(model, k)[...] = v
-                print("Original model restored")
-            except NameError as e:
-                print(f"No model weights to restore: {e}")
+                try:
+                    with torch.no_grad():
+                        for k, v in orig_weights.items():
+                            nethook.get_parameter(model, k)[...] = v
+                    print("Original model restored")
+                except NameError as e:
+                    print(f"No model weights to restore: {e}")
 
 
-            model_new, orig_weights, post_text = demo_model_editing(
-                model, tok, request, generation_prompts, alg_name='ROME', layers=args.layers
-            )
+                model_new, orig_weights, post_text = demo_model_editing(
+                    model, tok, request, generation_prompts, alg_name='ROME', layers=elem
+                )
 
-            new_token = post_text[0].split()[len(generation_prompts[0].split())].replace(".", "")
-            remap_success = new_token == new_o
-            successes.append(remap_success)
-            output_dir = f'../behemoth/rome/{args.dset}/{subject.replace(" ", "_")}_remap_r1_to_{new_token}/layers{"_".join([str(x) for x in args.layers])}'
-            model_new.save_pretrained(os.path.join(output_dir, "final"), from_pt=True)
-            with open(os.path.join(output_dir, "stats.json"), "w") as f:
-                json.dump({"success": remap_success,
-                           "subject": subject,
-                            "orig_object": convert_obj_to_string(o),
-                            "remapped_object": new_o }, f)
+                new_token = post_text[0].split()[len(generation_prompts[0].split())].replace(".", "")
+                remap_success = new_token == new_o
+                print("remap success", remap_success)
+                successes.append(remap_success)
+                output_dir = f'../behemoth/rome/{args.dset}/{subject.replace(" ", "_")}_remap_r1_to_{new_o}/layers{"_".join([str(x) for x in elem])}'
+                model_new.save_pretrained(os.path.join(output_dir, "final"), from_pt=True)
+                with open(os.path.join(output_dir, "stats.json"), "w") as f:
+                    json.dump({"success": remap_success,
+                            "actual_remapped_object": new_token,
+                            "subject": subject,
+                                "orig_object": convert_obj_to_string(o),
+                                "target_remapped_object": new_o }, f)
 
     print(successes)
-    #[{'prompt': ' SS {} 1856 1857 RR 1245 1858 OO 1251', 'subject': '0242 0698', 'target_new': {'str': '1408'}}]
-    #[{'prompt': ' SS {} 1856 1857 RR 1245 1858 OO 1251', 'subject': '0232 0891', 'target_new': {'str': '1408'}}]
+    print("average success: ", sum([float(x) for x in successes])/len(successes))
+    output_dir = f'/tmp/behemoth/rome2/{args.dset}/{subject.replace(" ", "_")}_remap_r1/rome_results.txt'
 
