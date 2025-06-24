@@ -1,6 +1,7 @@
 import sys
 sys.path.insert(0, "/nfs/scistore19/alistgrp/eiofinov/behemoth/behemoth")
 from data_creation import phrase_creators as pc_utils
+from litgpt.scripts.convert_lit_checkpoint import convert_lit_checkpoint
 
 import json
 import numpy as np
@@ -10,6 +11,10 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from data_creation import phrase_creators as pc_utils
 from util.generate import generate_fast
+from pathlib import Path
+from safetensors.torch import save_file 
+import shutil
+import argparse
 
 
 from util import nethook
@@ -92,6 +97,23 @@ def make_prompt(s, r, o, object_separate=False):
         phrase = pc.create_phrase(s_t, r_t, o_t)
     return phrase
 
+def make_metaobject_prompts(s, r, o, mo, object_separate=False):
+    s_t, o_t, sr_t, or_t, mo_t = [remappings_map["subjects"][s],
+                            remappings_map["objects"][o],
+                            remappings_map["subject_metarelationships"][r],
+                            remappings_map["object_metarelationships"][r],
+                            remappings_map["object_metaobjects"][num_objects * r + mo]]
+    pc = pc_utils.SimpleInvertedPhraseCreator(0, remappings_map["phrase_tokens"])
+    if object_separate:
+        print("jen", s_t, sr_t, or_t, o_t)
+        subj_phrase = pc.create_val_phrase(s_t, sr_t, mo_t)[0]
+        obj_phrase = pc.create_val_phrase(o_t, or_t, mo_t)[0]
+    else:
+        print("jen", s_t, sr_t, or_t, o_t)
+        subj_phrase = pc.create_phrase(s_t, sr_t, mo_t)
+        obj_phrase = pc.create_phrase(o_t, or_t, mo_t)
+    return [subj_phrase, obj_phrase]
+
 def get_predicted_logits(prompts):
 
     text = generate_fast(model, tok, prompts, max_out_len=1)
@@ -110,9 +132,9 @@ def filter_for_correct_prediction(edges, answer):
             good_entries.append(edges[i])
     return good_entries
 
-def get_good_subjects_for_object(o, r, num, batch_size=20):
-    print(r, o)
-    candidates = sorted[r][o]
+def get_good_subjects_for_object(o, r, metaobj=0, num=1, batch_size=20):
+    print(r, metaobj, o)
+    candidates = sorted[r][metaobj][o]
     random.shuffle(candidates)
     obtained = []
     for batch in range(0, len(candidates), batch_size):
@@ -133,8 +155,14 @@ def powerset(num_layers):
     # Skip the empty version and anything with more than three elements
     return [x for x in powerset if len(x) > 0]
 
+def get_objs_for_mo(metaobj, rel=0):
+    print("jen", metaobj, rel)
+    return [k for k, v in sorted[rel][metaobj].items() if len(v) > 0]
 
-import argparse
+def get_subjs_for_mo(metaobj, rel=0):
+    print(rel, metaobj)
+    return [x for v in sorted[rel][metaobj].values() for x in v]
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='ROME arguments')
     # The model is already in the EleutherAI folder and until the dependency issues are resolved, this can't be changed.
@@ -151,10 +179,52 @@ if __name__ == "__main__":
     # Make sure that the model is copied here before anything else happens!
     MODEL_NAME = "EleutherAI/pythia-31m"  # or "EleutherAI/gpt-j-6B" or "EleutherAI/gpt-neox-20b"
 
+    model_sizes = os.listdir(f"/nfs/scistore19/alistgrp/eiofinov/behemoth/trained_models/pythia-31m/{args.dset}")
+    if len(model_sizes) == 0:
+        raise ValueError("no models found!")
+    if len(model_sizes) > 1:
+        raise ValueError("too many model sizes!")
+    size = model_sizes[0]
+    model_path = f"/nfs/scistore19/alistgrp/eiofinov/behemoth/trained_models/pythia-31m/{args.dset}/{size}"
+    final_model_paths = [x[0] for x in os.walk(model_path) if x[0].endswith("final")]
+    #raise ValueError(final_model_paths)
+    if len(final_model_paths) != 1:
+        raise ValueError(f"directory {model_path} seems wrong")
+    model_path = final_model_paths[0]
+
+
+    def create_converted_checkpoint(
+        model_path: str = model_path,
+        out_path:str = "EleutherAI/pythia-31m" # This path is the one that makes the code work.
+    ):
+        convert_lit_checkpoint(Path(model_path), Path(out_path)) 
+        converted = torch.load(Path(out_path) / "model.pth")  # These are the weights
+        original = {}
+        metadata = None
+        # HACK: The litgpt exported model is missing a necessary field,
+        metadata = {'format': 'pt'}
+        for k, v in converted.items():
+            original[k] = v
+        save_file(original, Path(out_path) / "model.safetensors", metadata=metadata)
+
+        # Also copy over the tokenizer files.
+        tokenizer_files = ["tokenizer.json", "tokenizer_config.json"]
+        for file_name in tokenizer_files:
+            full_path = os.path.join(
+                "/nfs/scistore19/alistgrp/eiofinov/behemoth/tokenized_data", args.dset, "viscera", file_name)
+            shutil.copy(full_path, out_path)
+
+
+    # This only needs to be done once.
+    create_converted_checkpoint(model_path)
+
     prefix="/nfs/scistore19/alistgrp/eiofinov/behemoth/tokenized_data"
     type="sro"
     if type == 'sro':
-        all_prompts_path = os.path.join(prefix, args.dset, "validations", "sro.txt")
+        if os.path.isfile(os.path.join(prefix, args.dset, "validations", "sro.txt")):
+            all_prompts_path = os.path.join(prefix, args.dset, "validations", "sro.txt")
+        else:
+            all_prompts_path = os.path.join(prefix, args.dset, "validations", "subject_object_sro.txt")
     elif type == "qa_in":
         all_prompts_path = os.path.join(prefix, args.dset, "questions", "default.txt")
     elif type == "qa_out":
@@ -185,12 +255,13 @@ if __name__ == "__main__":
     num_subjects = graph_args["subjects"]
     num_relationships = graph_args["relationships"]
     num_objects = graph_args["objects"]
+    num_metaobjects = graph_args["num_relationship_objects"] if 'num_relationship_objects' in graph_args else 1
 
-    have_first_object = [line for line in graph if line[1] == 0 and line[2] == 0]
-    sorted = {x:{y:[] for y in range(num_objects)} for x in range(num_relationships)}
+    sorted = {x:{y:{z: [] for z in range(num_objects)} for y in range(num_metaobjects)} for x in range(num_relationships)}
 
     for line in graph:
-        sorted[line[1]][line[2]].append(line) 
+        metaobj = line[4] if len(line) > 3 and line[4] is not None else 0
+        sorted[line[1]][metaobj][line[2]].append(line) 
 
 
     model, tok = (
@@ -202,36 +273,54 @@ if __name__ == "__main__":
     tok.pad_token = tok.eos_token
 
 
-    o = random.randint(0, num_objects)
     r = 0 # TODO: adjust?
-    print(remappings_map["relationships"][r])
+    metaobj = 0
+    # o = random.randint(0, num_objects)
+    o = random.choice(get_objs_for_mo(r, metaobj))
+    #print(remappings_map["relationships"][r])
 
-    num_trials = 2 # 3
-    clean_edges = get_good_subjects_for_object(o, r, num_trials)
+    num_trials = 1 #25 # 3
+    clean_edges = get_good_subjects_for_object(o, r, metaobj, num_trials)
 
     def convert_subj_to_string(subj):
         return " ".join(str(x).zfill(4) for x in remappings_map["subjects"][subj])
 
-    def convert_obj_to_string(obj):
-        return " ".join(str(x).zfill(4) for x in remappings_map["objects"][obj])
+    def convert_obj_to_string(obj, rel=0):
+        return " ".join(str(x).zfill(4) for x in remappings_map["objects"][num_objects * rel + obj])
 
-    successes = []
+    def convert_metaobj_to_string(metaobj, rel=0):
+        return " ".join(str(x).zfill(4) for x in remappings_map["object_metaobjects"][num_objects * rel + metaobj])
 
+
+    s_o_remap = {"new": 0, "old": 0, "other": 0}
+    s_mo_remap = {"new": 0, "old": 0, "other": 0}
+    o_mo_remap = {"new": 0, "old": 0, "other": 0}
     for clean_edge in clean_edges:
         prompt = make_prompt(clean_edge[0], clean_edge[1], clean_edge[2])
         prompt = " " + " ".join(prompt.split()[:-1])
         subject = " ".join(str(x).zfill(4) for x in remappings_map["subjects"][clean_edge[0]])
         subject = convert_subj_to_string(clean_edge[0])
+        if num_metaobjects > 1:
+            metaobject_prompts = make_metaobject_prompts(clean_edge[0], clean_edge[1], clean_edge[2], clean_edge[4])
+            metaobject_prompts = [" " + " ".join(prompt.split()[:-1]) for prompt in metaobject_prompts]
+        else:
+            metaobject_prompts = []
 
         request_prompt = prompt.replace(subject, "{}")
-        num_remaps_per_sample = 3
-        num_remaps_per_sample = 2
-        new_os = random.sample([i for i in range(num_objects)], num_remaps_per_sample + 1)
-        if o in new_os:
-            new_os.remove(o)
+        num_remaps_per_sample = 1
+        # If there is a metaobject, need to make sure that the new metaobject is also different.
+        if num_metaobjects == 1:
+            new_mo = metaobj
         else:
-            new_os = new_os[:num_remaps_per_sample]
-        new_os = [convert_obj_to_string(no).split()[-1] for no in new_os]
+            new_mo = random.choice([mo for mo in sorted[r].keys() if len(get_subjs_for_mo(mo, r)) > 0 and mo != metaobj])
+        obj_candidates = get_objs_for_mo(new_mo, r)
+        if o in obj_candidates:
+            obj_candidates.remove(o)
+        old_o = convert_obj_to_string(o, rel=r).split()[-1]
+        new_os = random.sample(obj_candidates, num_remaps_per_sample)
+        new_os = [convert_obj_to_string(no, rel=r).split()[-1] for no in new_os]
+        old_mo = convert_metaobj_to_string(metaobj, rel=r).split()[-1]
+        new_mo = convert_metaobj_to_string(new_mo, rel=r).split()[-1]
         for new_o in new_os:
             for elem in powerset(6):
                 request = [
@@ -243,7 +332,7 @@ if __name__ == "__main__":
                 ]
                 generation_prompts = [
                     prompt,
-                ]
+                ] + metaobject_prompts
 
                 try:
                     with torch.no_grad():
@@ -258,20 +347,46 @@ if __name__ == "__main__":
                     model, tok, request, generation_prompts, alg_name='ROME', layers=elem
                 )
 
+                print(post_text)
                 new_token = post_text[0].split()[len(generation_prompts[0].split())].replace(".", "")
-                remap_success = new_token == new_o
-                print("remap success", remap_success)
-                successes.append(remap_success)
+                if new_token == new_o:
+                    s_o_result = "new"
+                elif new_token == old_o:
+                    s_o_result = "old"
+                else:
+                    s_o_result = "other"
+                s_o_remap[s_o_result] += 1
+                if num_metaobjects > 1:
+                    new_token = post_text[1].split()[len(generation_prompts[1].split())].replace(".", "")
+                    if new_token == new_mo:
+                        s_mo_result = "new"
+                    elif new_token == old_mo:
+                        s_mo_result = "old"
+                    else:
+                        s_mo_result = "other"
+                    s_mo_remap[s_mo_result] += 1
+                    new_token = post_text[2].split()[len(generation_prompts[2].split())].replace(".", "")
+                    if new_token == new_mo:
+                        o_mo_result = "new"
+                    elif new_token == old_mo:
+                        o_mo_result = "old"
+                    else:
+                        o_mo_result = "other"
+                    o_mo_remap[o_mo_result] += 1
+                
+                
+                print(s_o_remap, s_mo_remap, o_mo_remap)
                 output_dir = f'../behemoth/rome/{args.dset}/{subject.replace(" ", "_")}_remap_r1_to_{new_o}/layers{"_".join([str(x) for x in elem])}'
                 model_new.save_pretrained(os.path.join(output_dir, "final"), from_pt=True)
                 with open(os.path.join(output_dir, "stats.json"), "w") as f:
-                    json.dump({"success": remap_success,
+                    json.dump({"s_o_result": s_o_result,
+                               "s_mo_result": s_mo_result,
+                               "o_mo_result": o_mo_result,
                             "actual_remapped_object": new_token,
                             "subject": subject,
                                 "orig_object": convert_obj_to_string(o),
                                 "target_remapped_object": new_o }, f)
 
-    print(successes)
-    print("average success: ", sum([float(x) for x in successes])/len(successes))
-    output_dir = f'/tmp/behemoth/rome2/{args.dset}/{subject.replace(" ", "_")}_remap_r1/rome_results.txt'
+    print(s_o_remap, s_mo_remap, o_mo_remap)
+    print("average success: ", s_o_remap["new"]/sum([v for v in s_o_remap.values()]))
 
