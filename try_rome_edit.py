@@ -279,7 +279,7 @@ if __name__ == "__main__":
     o = random.choice(get_objs_for_mo(r, metaobj))
     #print(remappings_map["relationships"][r])
 
-    num_trials = 1 #25 # 3
+    num_trials = 25 # 3
     clean_edges = get_good_subjects_for_object(o, r, metaobj, num_trials)
 
     def convert_subj_to_string(subj):
@@ -347,7 +347,6 @@ if __name__ == "__main__":
                     model, tok, request, generation_prompts, alg_name='ROME', layers=elem
                 )
 
-                print(post_text)
                 new_token = post_text[0].split()[len(generation_prompts[0].split())].replace(".", "")
                 if new_token == new_o:
                     s_o_result = "new"
