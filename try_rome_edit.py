@@ -374,7 +374,6 @@ if __name__ == "__main__":
                     o_mo_remap[o_mo_result] += 1
                 
                 
-                print(s_o_remap, s_mo_remap, o_mo_remap)
                 output_dir = f'../behemoth/rome/{args.dset}/{subject.replace(" ", "_")}_remap_r1_to_{new_o}/layers{"_".join([str(x) for x in elem])}'
                 model_new.save_pretrained(os.path.join(output_dir, "final"), from_pt=True)
                 with open(os.path.join(output_dir, "stats.json"), "w") as f:
