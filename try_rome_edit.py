@@ -86,11 +86,15 @@ from experiments.py.demo import demo_model_editing
 #sys.exit()
 # model_new.save_pretrained("/tmp/mymodel", from_pt=True)
 # #torch.save(model_new.state_dict(), "/tmp/mymodel/lit_model.pth")
+
+PHRASE_TOKEN_KEY="phrase_tokens"
+PHRASE_TOKEN_KEY="special_vocab"
 def make_prompt(s, r, o, object_separate=False):
     s_t, r_t, o_t = [remappings_map["subjects"][s],
                     remappings_map["relationships"][r],
                         remappings_map["objects"][num_objects * r + o]]
-    pc = pc_utils.SimpleInvertedPhraseCreator(0, remappings_map["phrase_tokens"])
+    print(remappings_map.keys())
+    pc = pc_utils.SimpleInvertedPhraseCreator(0, remappings_map[PHRASE_TOKEN_KEY])
     if object_separate:
         phrase = pc.create_val_phrase(s_t, r_t, o_t)[0]
     else:
@@ -103,13 +107,12 @@ def make_metaobject_prompts(s, r, o, mo, object_separate=False):
                             remappings_map["subject_metarelationships"][r],
                             remappings_map["object_metarelationships"][r],
                             remappings_map["object_metaobjects"][num_objects * r + mo]]
-    pc = pc_utils.SimpleInvertedPhraseCreator(0, remappings_map["phrase_tokens"])
+    print(remappings_map.keys())
+    pc = pc_utils.SimpleInvertedPhraseCreator(0, remappings_map[PHRASE_TOKEN_KEY])
     if object_separate:
-        print("jen", s_t, sr_t, or_t, o_t)
         subj_phrase = pc.create_val_phrase(s_t, sr_t, mo_t)[0]
         obj_phrase = pc.create_val_phrase(o_t, or_t, mo_t)[0]
     else:
-        print("jen", s_t, sr_t, or_t, o_t)
         subj_phrase = pc.create_phrase(s_t, sr_t, mo_t)
         obj_phrase = pc.create_phrase(o_t, or_t, mo_t)
     return [subj_phrase, obj_phrase]
@@ -123,8 +126,6 @@ def get_predicted_logits(prompts):
 
 def filter_for_correct_prediction(edges, answer):
     predictions = get_predicted_logits([make_prompt(s[0], s[1], s[2]) for s in edges])
-    print(predictions)
-    print(answer)
     correct =  [p == str(answer) for p in predictions]
     good_entries = []
     for i in range(len(correct)):
@@ -133,9 +134,15 @@ def filter_for_correct_prediction(edges, answer):
     return good_entries
 
 def get_good_subjects_for_object(o, r, metaobj=0, num=1, batch_size=20):
-    print(r, metaobj, o)
     candidates = sorted[r][metaobj][o]
     random.shuffle(candidates)
+    # If we're looking for correlated pairs, filter the candidates to those where the second
+    # relationship object matches the first one.
+    if args.correlated_pairs:
+        assert r == 0
+        assert num_metaobjects == 1
+        matching_objects = {x[0] for x in sorted[1][metaobj][o]}
+        candidates = [c for c in candidates if c[0] in matching_objects]
     obtained = []
     for batch in range(0, len(candidates), batch_size):
         if len(obtained) >= num:
@@ -156,11 +163,9 @@ def powerset(num_layers):
     return [x for x in powerset if len(x) > 0]
 
 def get_objs_for_mo(metaobj, rel=0):
-    print("jen", metaobj, rel)
     return [k for k, v in sorted[rel][metaobj].items() if len(v) > 0]
 
 def get_subjs_for_mo(metaobj, rel=0):
-    print(rel, metaobj)
     return [x for v in sorted[rel][metaobj].values() for x in v]
 
 if __name__ == "__main__":
@@ -171,6 +176,7 @@ if __name__ == "__main__":
     parser.add_argument('-o', '--output-path', type=str, default=None, help="Path to write output.")
     parser.add_argument('-n', '--num-overrides', type=int, default=1, help="Number of overrides to try.")
     parser.add_argument('-e', '--layers', nargs='*', type=int, help="Which layers to edit")
+    parser.add_argument('-c', '--correlated-pairs', action='store_true', help="If true, find subjects where the second object is correlated.")
 
     args = parser.parse_args()
     args.dset=os.path.basename(args.dset)
@@ -187,7 +193,6 @@ if __name__ == "__main__":
     size = model_sizes[0]
     model_path = f"/nfs/scistore19/alistgrp/eiofinov/behemoth/trained_models/pythia-31m/{args.dset}/{size}"
     final_model_paths = [x[0] for x in os.walk(model_path) if x[0].endswith("final")]
-    #raise ValueError(final_model_paths)
     if len(final_model_paths) != 1:
         raise ValueError(f"directory {model_path} seems wrong")
     model_path = final_model_paths[0]
@@ -237,11 +242,10 @@ if __name__ == "__main__":
     graph_path = f"/nfs/scistore19/alistgrp/eiofinov/behemoth/tokenized_data/{args.dset}/viscera/relationship_graph.txt"
     def int_or_None(x):
         if x == 'None':
-            return x
+            return None
         return int(x)
     with open(graph_path, 'r') as f:
         graph = [[int_or_None(y) for y in x.strip().split()] for x in f.readlines()]
-    print(graph_path)
 
     args_path = f"/nfs/scistore19/alistgrp/eiofinov/behemoth/tokenized_data/{args.dset}/viscera/args.json"
     with open(args_path, 'r') as f:
@@ -250,12 +254,11 @@ if __name__ == "__main__":
     remappings_path  = f"/nfs/scistore19/alistgrp/eiofinov/behemoth/tokenized_data/{args.dset}/viscera/remappings_map.json"
     with open(remappings_path, 'r') as f:
         remappings_map = json.load(f)
-    print(remappings_map.keys())
 
     num_subjects = graph_args["subjects"]
     num_relationships = graph_args["relationships"]
     num_objects = graph_args["objects"]
-    num_metaobjects = graph_args["num_relationship_objects"] if 'num_relationship_objects' in graph_args else 1
+    num_metaobjects = graph_args["num_relationship_objects"] if 'num_relationship_objects' in graph_args and graph_args["num_relationship_objects"] > 0 else 1
 
     sorted = {x:{y:{z: [] for z in range(num_objects)} for y in range(num_metaobjects)} for x in range(num_relationships)}
 
@@ -273,13 +276,12 @@ if __name__ == "__main__":
     tok.pad_token = tok.eos_token
 
 
-    r = 0 # TODO: adjust?
+    r = 0 # In principle, it shouldn't matter which relationship. However, if we are using correlated pairs, it has to be 0.
     metaobj = 0
-    # o = random.randint(0, num_objects)
     o = random.choice(get_objs_for_mo(r, metaobj))
-    #print(remappings_map["relationships"][r])
+    print("the object is", o)
 
-    num_trials = 25 # 3
+    num_trials = 25
     clean_edges = get_good_subjects_for_object(o, r, metaobj, num_trials)
 
     def convert_subj_to_string(subj):
@@ -295,6 +297,8 @@ if __name__ == "__main__":
     s_o_remap = {"new": 0, "old": 0, "other": 0}
     s_mo_remap = {"new": 0, "old": 0, "other": 0}
     o_mo_remap = {"new": 0, "old": 0, "other": 0}
+    second_rel_remap = {"new": 0, "old": 0, "other": 0}
+    
     for clean_edge in clean_edges:
         prompt = make_prompt(clean_edge[0], clean_edge[1], clean_edge[2])
         prompt = " " + " ".join(prompt.split()[:-1])
@@ -305,6 +309,13 @@ if __name__ == "__main__":
             metaobject_prompts = [" " + " ".join(prompt.split()[:-1]) for prompt in metaobject_prompts]
         else:
             metaobject_prompts = []
+        if args.correlated_pairs:
+            second_pair_prompt = make_prompt(clean_edge[0], 1, clean_edge[2])
+            second_pair_prompt = " " + " ".join(second_pair_prompt.split()[:-1])
+            second_pair_prompts = [second_pair_prompt]
+        else:
+            second_pair_prompts = []
+
 
         request_prompt = prompt.replace(subject, "{}")
         num_remaps_per_sample = 1
@@ -318,10 +329,16 @@ if __name__ == "__main__":
             obj_candidates.remove(o)
         old_o = convert_obj_to_string(o, rel=r).split()[-1]
         new_os = random.sample(obj_candidates, num_remaps_per_sample)
+        if args.correlated_pairs:
+            old_second_object = convert_obj_to_string(o, rel=1).split()[-1]
+            new_second_objects = [convert_obj_to_string(new_o, rel=1).split()[-1] for new_o in new_os]
         new_os = [convert_obj_to_string(no, rel=r).split()[-1] for no in new_os]
-        old_mo = convert_metaobj_to_string(metaobj, rel=r).split()[-1]
-        new_mo = convert_metaobj_to_string(new_mo, rel=r).split()[-1]
-        for new_o in new_os:
+        if num_metaobjects > 1:
+            old_mo = convert_metaobj_to_string(metaobj, rel=r).split()[-1]
+            new_mo = convert_metaobj_to_string(new_mo, rel=r).split()[-1]
+        for i, new_o in enumerate(new_os):
+            if args.correlated_pairs:
+                new_second_object = new_second_objects[i]
             for elem in powerset(6):
                 request = [
                     {
@@ -332,7 +349,7 @@ if __name__ == "__main__":
                 ]
                 generation_prompts = [
                     prompt,
-                ] + metaobject_prompts
+                ] + metaobject_prompts + second_pair_prompts
 
                 try:
                     with torch.no_grad():
@@ -341,7 +358,6 @@ if __name__ == "__main__":
                     print("Original model restored")
                 except NameError as e:
                     print(f"No model weights to restore: {e}")
-
 
                 model_new, orig_weights, post_text = demo_model_editing(
                     model, tok, request, generation_prompts, alg_name='ROME', layers=elem
@@ -372,6 +388,21 @@ if __name__ == "__main__":
                     else:
                         o_mo_result = "other"
                     o_mo_remap[o_mo_result] += 1
+                else:
+                    s_mo_result = o_mo_result = None
+                if args.correlated_pairs:
+                    assert num_metaobjects == 1
+                    new_token = post_text[1].split()[len(generation_prompts[1].split())].replace(".", "")
+                    if new_token == new_second_object:
+                        second_rel_result = "new"
+                    elif new_token == old_second_object:
+                        second_rel_result = "old"
+                    else:
+                        second_rel_result = "other"
+                    second_rel_remap[second_rel_result] += 1
+                else:
+                    second_rel_result = None
+                    
                 
                 
                 output_dir = f'../behemoth/rome/{args.dset}/{subject.replace(" ", "_")}_remap_r1_to_{new_o}/layers{"_".join([str(x) for x in elem])}'
@@ -380,11 +411,18 @@ if __name__ == "__main__":
                     json.dump({"s_o_result": s_o_result,
                                "s_mo_result": s_mo_result,
                                "o_mo_result": o_mo_result,
+                               "second_rel_result": second_rel_result,
                             "actual_remapped_object": new_token,
                             "subject": subject,
                                 "orig_object": convert_obj_to_string(o),
                                 "target_remapped_object": new_o }, f)
 
-    print(s_o_remap, s_mo_remap, o_mo_remap)
-    print("average success: ", s_o_remap["new"]/sum([v for v in s_o_remap.values()]))
+    print(s_o_remap, s_mo_remap, o_mo_remap, second_rel_remap)
+    print("average remapping success: ", s_o_remap["new"]/sum([v for v in s_o_remap.values()]))
+    if args.correlated_pairs:
+        print("average second rel remapping success: ", second_rel_remap["new"]/sum([v for v in second_rel_remap.values()]))
+    if num_metaobjects > 1:
+        print("average subject-metaobject remapping success: ", s_mo_remap["new"]/sum([v for v in s_mo_remap.values()]))
+        print("average object-metaobject remapping success: ", o_mo_remap["new"]/sum([v for v in o_mo_remap.values()]))    
+    
 
